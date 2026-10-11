@@ -191,7 +191,10 @@ function calcEmpStats(records, threshold) {
 function calcGroupStats(records, key, threshold) {
   const groups = {};
   records.forEach(r => {
-    const k = r[key] ?? 'Unknown';
+    let k = r[key];
+    if (k === null || k === undefined || String(k).trim() === '') {
+      k = (key === 'ppr_process_group') ? 'Unassigned (No PPR Track)' : 'Unknown';
+    }
     if (!groups[k]) groups[k] = [];
     groups[k].push(r);
   });
@@ -347,6 +350,7 @@ function parseCSV(text, filename = 'Uploaded file') {
 
     row.change_over_time = parseInt(row.change_over_time) || Math.round(cod * 60);
     row.floor = row.floor !== '' && row.floor !== null && !isNaN(row.floor) ? parseFloat(row.floor) : null;
+    row.ppr_process_group = (row.ppr_process_group || '').trim() || 'Unassigned (No PPR Track)';
 
     // Normalize required identity
     row.processed_day = formatDay(row.processed_day);
@@ -1079,12 +1083,10 @@ function exportDefaulters(data) {
 }
 
 // ─── PAGE: PROCESS ANALYSIS ───────────────────────────────────────
-let selProcess = '';
 function renderProcess(c) {
   const data = DS.filtered;
   if (!data.length) { c.innerHTML = emptyState('No data'); return; }
   const procStats = calcGroupStats(data,'ppr_process_group',GF.threshold).sort((a,b)=>b.avg-a.avg);
-  if (!selProcess && procStats.length) selProcess = procStats[0].name;
 
   c.innerHTML = `
   <div class="fade-in">
@@ -1132,13 +1134,23 @@ function renderProcess(c) {
 
   buildChart('proc-pie', $('proc-pie'), pieConfig(procStats.map(p=>p.name), procStats.map(p=>p.count),
     procStats.map((_,i)=>pColor(i)), {doughnut:true, legend:false}));
-
-  if (selProcess) openProcessDrill(selProcess, true);
 }
 
-window.openProcessDrill = function(procName, inline=false) {
-  selProcess = procName;
-  const data = DS.filtered.filter(r=>r.ppr_process_group===procName);
+window.closeDrillPanel = function(panelId) {
+  const panel = $(panelId);
+  if (panel) {
+    const prev = panel.previousElementSibling;
+    panel.innerHTML = '';
+    if (prev) {
+      prev.scrollIntoView({ behavior: 'smooth' });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+};
+
+window.openProcessDrill = function(procName) {
+  const data = DS.filtered.filter(r=>(r.ppr_process_group || 'Unassigned (No PPR Track)')===procName);
   const empStats = calcEmpStats(data,GF.threshold).filter(e=>e.count>=GF.minEvents).sort((a,b)=>b.avg-a.avg);
   const daily = calcDailyStats(data);
   const floors = calcGroupStats(data,'floor',GF.threshold);
@@ -1148,11 +1160,15 @@ window.openProcessDrill = function(procName, inline=false) {
   const html = `
     <div class="chart-card">
       <div class="card-header">
-        <span class="card-title">📋 ${escHtml(procName)} — Deep Dive</span>
-        <span class="card-badge">${fmtI(data.length)} events · ${fmtI(empStats.length)} employees</span>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span class="card-title">⚙ ${escHtml(procName)} — Deep Dive</span>
+          <span class="card-badge">${fmtI(data.length)} events · ${fmtI(empStats.length)} employees</span>
+        </div>
+        <button class="btn-sm btn-ghost" onclick="closeDrillPanel('process-drill-panel')" title="Close details" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">✕ Close</button>
       </div>
-      <div class="grid-2 mb16">
+      <div class="kpi-strip cols-3 mb16">
         ${kpiCard('⏱',fmt(calcStats(data)?.avg),'Avg COD')}
+        ${kpiCard('👥',fmtI(empStats.length),'Employees')}
         ${kpiCard('📦',fmtI(data.length),'Events')}
       </div>
       <div class="grid-2 mb16">
@@ -1165,16 +1181,31 @@ window.openProcessDrill = function(procName, inline=false) {
           <div class="chart-wrap h180"><canvas id="pd-bkt"></canvas></div>
         </div>
       </div>
+      <div class="grid-2 mb16">
+        <div class="chart-card">
+          <div class="card-header"><span class="card-title">By Floor</span></div>
+          <div class="chart-wrap h180"><canvas id="pd-floor"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="card-header"><span class="card-title">By MOD</span></div>
+          <div class="chart-wrap h180"><canvas id="pd-mod"></canvas></div>
+        </div>
+      </div>
       <div class="table-wrap">
-        <div class="table-header"><span class="table-title">Top Employees in this Process (Highest Avg First)</span></div>
+        <div class="table-header"><span class="table-title">Top Employees in ${escHtml(procName)} (Highest Avg First)</span></div>
         <div class="t-scroll">${empTableHTML(empStats.slice(0,20), false)}</div>
+      </div>
+      <div style="display:flex;justify-content:center;margin-top:16px;">
+        <button class="btn-sm btn-ghost" onclick="closeDrillPanel('process-drill-panel')" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 16px;">
+          ✕ Close Details
+        </button>
       </div>
     </div>`;
 
-  if (inline) { $('process-drill-panel').innerHTML = html; }
-  else {
-    // Open as overlay
-    openDrillOverlay(html);
+  const panel = $('process-drill-panel');
+  if (panel) {
+    panel.innerHTML = html;
+    panel.scrollIntoView({ behavior: 'smooth' });
   }
 
   setTimeout(() => {
@@ -1183,7 +1214,15 @@ window.openProcessDrill = function(procName, inline=false) {
       backgroundColor:'rgba(79,172,254,.15)',fill:true,pointBackgroundColor:'#4facfe'}]));
     if ($('pd-bkt')) buildChart('pd-bkt',$('pd-bkt'),pieConfig(BUCKET_ORDER,
       BUCKET_ORDER.map(b=>bkt.counts[b]||0),COD_COLS,{doughnut:true,legend:false}));
-  },50);
+    if ($('pd-floor')) buildChart('pd-floor',$('pd-floor'),barConfig(floors.map(f=>`Floor ${f.name}`),[{
+      label:'Avg COD',data:floors.map(f=>f.avg),
+      backgroundColor:floors.map((_,i)=>pColor(i)+'b0'),borderColor:floors.map((_,i)=>pColor(i)),borderWidth:1.5,borderRadius:5
+    }]));
+    if ($('pd-mod')) buildChart('pd-mod',$('pd-mod'),barConfig(mods.map(m=>`MOD ${m.name}`),[{
+      label:'Avg COD',data:mods.map(m=>m.avg),
+      backgroundColor:mods.map((_,i)=>pColor(i)+'b0'),borderColor:mods.map((_,i)=>pColor(i)),borderWidth:1.5,borderRadius:5
+    }]));
+  }, 50);
 };
 
 // ─── PAGE: DAILY ANALYSIS ─────────────────────────────────────────
@@ -1569,7 +1608,13 @@ window.openFloorDrill = function(floorNum) {
 
   const html = `
     <div class="chart-card">
-      <div class="card-header"><span class="card-title">🏢 Floor ${floorNum} — Deep Dive</span><span class="card-badge">${fmtI(data.length)} events</span></div>
+      <div class="card-header">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span class="card-title">🏢 Floor ${floorNum} — Deep Dive</span>
+          <span class="card-badge">${fmtI(data.length)} events</span>
+        </div>
+        <button class="btn-sm btn-ghost" onclick="closeDrillPanel('floor-drill-panel')" title="Close details" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">✕ Close</button>
+      </div>
       <div class="kpi-strip cols-3 mb16">
         ${kpiCard('⏱',fmt(calcStats(data)?.avg),'Avg COD')}
         ${kpiCard('👥',fmtI(empStats.length),'Employees')}
@@ -1598,6 +1643,11 @@ window.openFloorDrill = function(floorNum) {
       <div class="table-wrap">
         <div class="table-header"><span class="table-title">Top Employees on Floor ${floorNum}</span></div>
         <div class="t-scroll">${empTableHTML(empStats.slice(0,20),false)}</div>
+      </div>
+      <div style="display:flex;justify-content:center;margin-top:16px;">
+        <button class="btn-sm btn-ghost" onclick="closeDrillPanel('floor-drill-panel')" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 16px;">
+          ✕ Close Details
+        </button>
       </div>
     </div>`;
   $('floor-drill-panel').innerHTML = html;
@@ -1681,7 +1731,13 @@ window.openModDrill = function(modName) {
 
   const html = `
     <div class="chart-card">
-      <div class="card-header"><span class="card-title">📦 MOD ${escHtml(modName)} — Deep Dive</span><span class="card-badge">${fmtI(data.length)} events</span></div>
+      <div class="card-header">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span class="card-title">📦 MOD ${escHtml(modName)} — Deep Dive</span>
+          <span class="card-badge">${fmtI(data.length)} events</span>
+        </div>
+        <button class="btn-sm btn-ghost" onclick="closeDrillPanel('mod-drill-panel')" title="Close details" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">✕ Close</button>
+      </div>
       <div class="kpi-strip cols-3 mb16">
         ${kpiCard('⏱',fmt(calcStats(data)?.avg),'Avg COD')}
         ${kpiCard('👥',fmtI(empStats.length),'Employees')}
@@ -1700,6 +1756,11 @@ window.openModDrill = function(modName) {
       <div class="table-wrap">
         <div class="table-header"><span class="table-title">Top Employees in MOD ${escHtml(modName)}</span></div>
         <div class="t-scroll">${empTableHTML(empStats.slice(0,20),false)}</div>
+      </div>
+      <div style="display:flex;justify-content:center;margin-top:16px;">
+        <button class="btn-sm btn-ghost" onclick="closeDrillPanel('mod-drill-panel')" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 16px;">
+          ✕ Close Details
+        </button>
       </div>
     </div>`;
   $('mod-drill-panel').innerHTML = html;
@@ -1849,8 +1910,11 @@ window.openBinDrill = function(field, val) {
   const html = `
     <div class="chart-card">
       <div class="card-header">
-        <span class="card-title">&#128452; ${label}: ${escHtml(val)} — Deep Dive</span>
-        <span class="card-badge">${fmtI(data.length)} events</span>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span class="card-title">&#128452; ${label}: ${escHtml(val)} — Deep Dive</span>
+          <span class="card-badge">${fmtI(data.length)} events</span>
+        </div>
+        <button class="btn-sm btn-ghost" onclick="closeDrillPanel('bin-drill-panel')" title="Close details" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">✕ Close</button>
       </div>
       <div class="kpi-strip cols-3 mb16">
         ${kpiCard('⏱', fmt(calcStats(data)?.avg), 'Avg COD')}
@@ -1880,6 +1944,11 @@ window.openBinDrill = function(field, val) {
       <div class="table-wrap">
         <div class="table-header"><span class="table-title">Top Employees in ${label}: ${escHtml(val)}</span></div>
         <div class="t-scroll">${empTableHTML(empStats.slice(0, 20), false)}</div>
+      </div>
+      <div style="display:flex;justify-content:center;margin-top:16px;">
+        <button class="btn-sm btn-ghost" onclick="closeDrillPanel('bin-drill-panel')" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 16px;">
+          ✕ Close Details
+        </button>
       </div>
     </div>`;
 
