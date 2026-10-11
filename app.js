@@ -981,21 +981,17 @@ let defPage=1, defPageSize=25, defSort='avg', defProcessSel='';
 function renderDefaulter(c) {
   const data = DS.filtered;
   if (!data.length) { c.innerHTML = emptyState('No data'); return; }
-  const procs = ['', ...DS.processes.filter(p=>data.some(r=>r.ppr_process_group===p))];
 
   c.innerHTML = `
   <div class="fade-in">
     <div class="page-title"><span class="page-title-icon">🚩</span>Defaulter Analysis</div>
-    <p class="page-desc">Employees ranked by average changeover duration. High-duration threshold: <b>${GF.threshold} min</b></p>
+    <p class="page-desc">Associates ranked by changeover duration across current filters.</p>
 
-    <h2 class="section-title2">SECTION A — Top Defaulters Across All Processes</h2>
     <div class="filter-row">
       <div class="ctrl-group"><span class="ctrl-lbl">Rank by</span>
         <select id="def-sort" class="ctrl-sel">
           <option value="avg" ${defSort==='avg'?'selected':''}>Avg COD (highest first)</option>
           <option value="sum" ${defSort==='sum'?'selected':''}>Total Minutes (highest first)</option>
-          <option value="hiCount" ${defSort==='hiCount'?'selected':''}>High-Duration Count (highest first)</option>
-          <option value="hiPct" ${defSort==='hiPct'?'selected':''}>High-Duration % (highest first)</option>
         </select>
       </div>
       <div class="ctrl-group"><span class="ctrl-lbl">Min Events</span>
@@ -1006,62 +1002,43 @@ function renderDefaulter(c) {
           <option value="10">Top 10</option>
           <option value="20">Top 20</option>
           <option value="50">Top 50</option>
-          <option value="all">All</option>
+          <option value="all">All Associates</option>
         </select>
       </div>
-      <button class="btn-export" id="def-export-a">⬇ Export CSV</button>
+      <button class="btn-export" id="def-export">⬇ Export CSV</button>
     </div>
-    <div id="def-section-a"></div>
-
-    <hr class="section-sep">
-    <h2 class="section-title2">SECTION B — Top Defaulters by Process</h2>
-    <div class="filter-row">
-      <div class="ctrl-group"><span class="ctrl-lbl">Process</span>
-        <select id="def-proc-sel" class="ctrl-sel">
-          ${procs.map(p=>`<option value="${escHtml(p)}" ${p===defProcessSel?'selected':''}>${p||'All Processes'}</option>`).join('')}
-        </select>
-      </div>
-      <div class="ctrl-group"><span class="ctrl-lbl">Show</span>
-        <select id="def-top-b" class="ctrl-sel">
-          <option value="5">Top 5</option>
-          <option value="10">Top 10</option>
-          <option value="20">Top 20</option>
-          <option value="all">All</option>
-        </select>
-      </div>
-      <button class="btn-export" id="def-export-b">⬇ Export CSV</button>
-    </div>
-    <div id="def-section-b"></div>
+    <div id="def-table-container"></div>
   </div>`;
 
-  renderDefSectionA(data);
-  renderDefSectionB(data, defProcessSel);
+  renderDefTable(data);
 
-  $('def-sort').addEventListener('change', e => { defSort=e.target.value; renderDefSectionA(data); });
-  $('def-min-ev').addEventListener('change', e => { GF.minEvents=parseInt(e.target.value)||1; $('gf-min-events').value=GF.minEvents; renderDefSectionA(data); renderDefSectionB(data, defProcessSel); });
-  $('def-top').addEventListener('change', () => renderDefSectionA(data));
-  $('def-proc-sel').addEventListener('change', e => { defProcessSel=e.target.value; renderDefSectionB(data, defProcessSel); });
-  $('def-top-b').addEventListener('change', () => renderDefSectionB(data, defProcessSel));
-  $('def-export-a').addEventListener('click', () => exportDefaulersA(data));
-  $('def-export-b').addEventListener('click', () => exportDefaultersB(data, defProcessSel));
+  $('def-sort').addEventListener('change', e => { defSort=e.target.value; renderDefTable(data); });
+  $('def-min-ev').addEventListener('change', e => {
+    GF.minEvents = parseInt(e.target.value) || 1;
+    if ($('gf-min-events')) $('gf-min-events').value = GF.minEvents;
+    renderDefTable(data);
+  });
+  $('def-top').addEventListener('change', () => renderDefTable(data));
+  $('def-export').addEventListener('click', () => exportDefaulters(data));
 }
 
-function renderDefSectionA(data) {
-  let stats = calcEmpStats(data, GF.threshold).filter(e=>e.count>=GF.minEvents);
+function renderDefTable(data) {
+  let stats = calcEmpStats(data, GF.threshold).filter(e => e.count >= GF.minEvents);
   stats.sort((a,b) => b[defSort] - a[defSort]);
-  const topVal = $('def-top')?.value || '25';
+  const topVal = $('def-top')?.value || '10';
   if (topVal !== 'all') stats = stats.slice(0, parseInt(topVal));
 
+  const activeProcess = GF.process || 'All Processes';
   const html = `
     <div class="table-wrap">
       <div class="table-header">
-        <span class="table-title">All Processes · ${fmtI(stats.length)} employees shown</span>
+        <span class="table-title">${escHtml(activeProcess)} · ${fmtI(stats.length)} associates shown</span>
       </div>
       <div class="t-scroll">
         <table class="data-table">
           <thead><tr>
             <th>#</th><th>Employee Login</th><th class="th-right">Events</th>
-            <th class="th-right">Avg COD</th>
+            <th class="th-right">Avg COD (min)</th>
             <th class="th-right">Total Min</th>
             <th>Top Process</th><th>Floors</th><th>MODs</th><th>Action</th>
           </tr></thead>
@@ -1081,48 +1058,21 @@ function renderDefSectionA(data) {
         </table>
       </div>
     </div>`;
-  $('def-section-a').innerHTML = html;
+  $('def-table-container').innerHTML = html;
 }
 
-function renderDefSectionB(data, proc) {
-  const filtered = proc ? data.filter(r=>r.ppr_process_group===proc) : data;
-  if (!filtered.length) { $('def-section-b').innerHTML = '<p class="empty-state">No records for this process.</p>'; return; }
-
-  const topVal = $('def-top-b')?.value || '10';
-  let stats = calcEmpStats(filtered, GF.threshold).filter(e=>e.count>=GF.minEvents);
-  stats.sort((a,b)=>b.avg-a.avg);
-  if (topVal !== 'all') stats = stats.slice(0, parseInt(topVal));
-
-  const procLabel = proc || 'All Processes';
-  const html = `
-    <div class="table-wrap">
-      <div class="table-header">
-        <span class="table-title">${escHtml(procLabel)} · ${fmtI(stats.length)} employees</span>
-        <span class="card-badge">${fmtI(filtered.length)} events</span>
-      </div>
-      <div class="t-scroll">
-        <table class="data-table">
-          <thead><tr>
-            <th>#</th><th>Employee Login</th><th class="th-right">Events</th>
-            <th class="th-right">Avg COD</th>
-            <th class="th-right">Total Min</th>
-            <th>Floors</th><th>Action</th>
-          </tr></thead>
-          <tbody>${stats.map((e,i) => `
-            <tr>
-              <td class="td-num">${i+1}</td>
-              <td class="td-mono">${escHtml(e.login)}</td>
-              <td class="td-num">${fmtI(e.count)}</td>
-              <td class="td-num ${codClassTd(e.avg)}">${fmt(e.avg)}</td>
-              <td class="td-num">${fmt(e.sum)}</td>
-              <td>${e.floors.join(', ')}</td>
-              <td><button class="btn-sm btn-ghost" onclick="openEmp360('${escHtml(e.login)}')">360°</button></td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
-  $('def-section-b').innerHTML = html;
+function exportDefaulters(data) {
+  const stats = calcEmpStats(data, GF.threshold).filter(e => e.count >= GF.minEvents).sort((a,b) => b.avg - a.avg);
+  const rows = stats.map(e => ({
+    login: e.login,
+    avg_cod: e.avg,
+    events: e.count,
+    total_min: e.sum,
+    top_process: e.freqProc,
+    floors: e.floors.join(';'),
+    mods: e.mods.join(';')
+  }));
+  exportCSV(rows, 'cod_defaulters.csv');
 }
 
 // ─── PAGE: PROCESS ANALYSIS ───────────────────────────────────────
@@ -2473,17 +2423,6 @@ window.exportRecords = function(logins) {
   const data = DS.filtered.filter(r=>logins.includes(r.employeelogin));
   exportCSV(data, `cod_employee_${logins.join('_')}.csv`);
 };
-function exportDefaulersA(data) {
-  const stats = calcEmpStats(data, GF.threshold).filter(e=>e.count>=GF.minEvents).sort((a,b)=>b.avg-a.avg);
-  const rows = stats.map(e=>({login:e.login,avg_cod:e.avg,events:e.count,total_min:e.sum,hi_dur_events:e.hiCount,hi_dur_pct:e.hiPct,top_process:e.freqProc,floors:e.floors.join(';'),mods:e.mods.join(';')}));
-  exportCSV(rows,'cod_defaulters_all_processes.csv');
-}
-function exportDefaultersB(data, proc) {
-  const filtered = proc ? data.filter(r=>r.ppr_process_group===proc) : data;
-  const stats = calcEmpStats(filtered, GF.threshold).filter(e=>e.count>=GF.minEvents).sort((a,b)=>b.avg-a.avg);
-  const rows = stats.map(e=>({process:proc||'all',login:e.login,avg_cod:e.avg,events:e.count,total_min:e.sum,hi_dur_pct:e.hiPct}));
-  exportCSV(rows,'cod_defaulters_by_process.csv');
-}
 
 // ─── PAGE: FILES MANAGER ──────────────────────────────────────────
 function renderFilesManager(c) {
