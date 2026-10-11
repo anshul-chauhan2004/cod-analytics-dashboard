@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Changeover Duration Analytics</title>
+<meta name="description" content="Changeover Duration (COD) analytics — upload your CSV and get instant warehouse insights.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ═══════════════ INITIAL LOADER (Prevents flash on reload) ════════ -->
+<div id="startup-loader" style="position:fixed;inset:0;z-index:300;background:#0a0d14;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;">
+  <div style="font-size:40px;animation:pulse-i 2s infinite;">⏱</div>
+  <div style="font-size:16px;font-weight:700;color:#e8eaf0;letter-spacing:1px;">COD Analytics</div>
+  <div style="font-size:12px;color:#8b92a8;">Restoring workspace...</div>
+</div>
+
+<!-- ═══════════════ UPLOAD SCREEN ════════════════════════════════ -->
+<div id="upload-screen" class="upload-screen" style="display:none">
+  <div class="upload-glow"></div>
+  <div class="upload-card">
+    <div class="upload-icon">&#9201;</div>
+    <h1 class="upload-title">CHANGEOVER DURATION</h1>
+    <p class="upload-subtitle">Warehouse Analytics Platform</p>
+    <p class="upload-desc">Upload your CSV export to generate instant operational insights.<br>All data is processed locally in your browser.</p>
+    <div class="drop-zone" id="drop-zone">
+      <div class="drop-inner">
+        <div class="drop-icon">&#128196;</div>
+        <p class="drop-text">Drag &amp; drop your CSV here</p>
+        <p class="drop-sub">or</p>
+        <label class="btn-upload" for="file-input">Choose File</label>
+        <input type="file" id="file-input" accept=".csv,.xls,.xlsx,.txt" multiple style="display:none">
+        <p class="drop-hint">Supports single or multiple .csv &amp; .xls files (combine or analyze)</p>
+      </div>
+    </div>
+    <div id="upload-error" class="upload-error" style="display:none"></div>
+    <div id="upload-progress" class="upload-progress" style="display:none">
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+      <p class="progress-text" id="progress-text">Parsing CSV...</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ APP SHELL ════════════════════════════════════ -->
+<div id="app-shell" class="app-shell" style="display:none">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-icon">&#9201;</span>
+      <div>
+        <div class="brand-name">COD Analytics</div>
+        <div class="brand-wh" id="sb-warehouse">DEL5</div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Main</div>
+      <a class="nav-item active" data-page="overview" href="#">
+        <span class="nav-icon">&#128200;</span><span>Overview</span>
+      </a>
+      <a class="nav-item" data-page="defaulter" href="#">
+        <span class="nav-icon">&#128681;</span><span>Defaulter Analysis</span>
+      </a>
+      <a class="nav-item" data-page="process" href="#">
+        <span class="nav-icon">&#9881;</span><span>Process Analysis</span>
+      </a>
+      <div class="nav-section-label">Trends</div>
+      <a class="nav-item" data-page="daily" href="#">
+        <span class="nav-icon">&#128197;</span><span>Daily Analysis</span>
+      </a>
+      <a class="nav-item" data-page="weekly" href="#">
+        <span class="nav-icon">&#128467;</span><span>Weekly Analysis</span>
+      </a>
+      <div class="nav-section-label">Dimensions</div>
+      <a class="nav-item" data-page="floor" href="#">
+        <span class="nav-icon">&#127968;</span><span>Floor Analysis</span>
+      </a>
+      <a class="nav-item" data-page="mod" href="#">
+        <span class="nav-icon">&#128230;</span><span>MOD Analysis</span>
+      </a>
+      <a class="nav-item" data-page="bin" href="#">
+        <span class="nav-icon">&#128452;</span><span>Bin Analysis (Type &amp; Usage)</span>
+      </a>
+      <a class="nav-item" data-page="bucket" href="#">
+        <span class="nav-icon">&#127775;</span><span>COD Bucket Analysis</span>
+      </a>
+      <div class="nav-section-label">Employee</div>
+      <a class="nav-item" data-page="emp360" href="#">
+        <span class="nav-icon">&#128100;</span><span>Employee 360</span>
+      </a>
+      <div class="nav-section-label">Data</div>
+      <a class="nav-item" data-page="files" href="#">
+        <span class="nav-icon">&#128194;</span><span>Files (<span id="sb-file-count">0</span>)</span>
+      </a>
+      <a class="nav-item" data-page="explorer" href="#">
+        <span class="nav-icon">&#128269;</span><span>Event Explorer</span>
+      </a>
+      <a class="nav-item" data-page="quality" href="#">
+        <span class="nav-icon">&#9989;</span><span>Data Quality</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <button class="btn-new-upload" id="btn-new-upload">&#8679; Upload New CSV</button>
+      <div class="ds-info" id="ds-info"></div>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <div class="main-wrap">
+    <!-- TOP BAR -->
+    <header class="top-bar">
+      <div class="topbar-filters" id="topbar-filters">
+        <!-- Date Range Filter Pill -->
+        <div class="tf-pill date-pill">
+          <label class="tf-pill-label" for="gf-date-from">Date</label>
+          <div class="tf-date-wrap">
+            <select id="gf-date-from" class="tf-select-clean"></select>
+            <span class="tf-arrow">to</span>
+            <select id="gf-date-to" class="tf-select-clean"></select>
+          </div>
+        </div>
+
+        <div class="tf-divider"></div>
+
+        <!-- Shift Pill -->
+        <div class="tf-pill">
+          <label class="tf-pill-label" for="gf-shift">Shift</label>
+          <select id="gf-shift" class="tf-select-clean">
+            <option value="">All Shifts</option>
+            <option value="Day">Day</option>
+            <option value="Night">Night</option>
+          </select>
+        </div>
+
+        <!-- Process Pill -->
+        <div class="tf-pill">
+          <label class="tf-pill-label" for="gf-process">Process</label>
+          <select id="gf-process" class="tf-select-clean">
+            <option value="">All Processes</option>
+          </select>
+        </div>
+
+        <!-- Floor Pill -->
+        <div class="tf-pill">
+          <label class="tf-pill-label" for="gf-floor">Floor</label>
+          <select id="gf-floor" class="tf-select-clean">
+            <option value="">All Floors</option>
+          </select>
+        </div>
+
+        <!-- MOD Pill -->
+        <div class="tf-pill">
+          <label class="tf-pill-label" for="gf-mod">MOD</label>
+          <select id="gf-mod" class="tf-select-clean">
+            <option value="">All MODs</option>
+          </select>
+        </div>
+
+        <div class="tf-divider"></div>
+
+        <!-- Threshold & Min Events Pill -->
+        <div class="tf-pill num-pill">
+          <label class="tf-pill-label" for="gf-min-events">Min Evt</label>
+          <input type="number" id="gf-min-events" class="tf-input-clean" value="1" min="1" max="999">
+        </div>
+
+        <div class="tf-pill num-pill">
+          <label class="tf-pill-label" for="gf-threshold">Thresh</label>
+          <div class="tf-input-unit">
+            <input type="number" id="gf-threshold" class="tf-input-clean" value="10" min="1" step="0.5">
+            <span class="unit-text">min</span>
+          </div>
+        </div>
+
+        <!-- Right action cluster -->
+        <div class="tf-actions">
+          <button class="btn-clear-filters" id="btn-clear-filters" title="Reset all filters">
+            <span class="btn-clear-icon">&#10005;</span> Reset
+          </button>
+          <div class="records-badge" id="filtered-count">
+            <span class="pulse-dot"></span>
+            <span class="badge-text">Loading...</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- PAGE CONTAINER & LOADER -->
+    <div id="page-loader" class="page-loader" style="display:none">
+      <div class="page-loader-spinner"></div>
+      <div class="page-loader-text" id="page-loader-text">Analyzing dataset...</div>
+    </div>
+
+    <main class="page-container" id="page-container">
+      <!-- Pages are rendered here by JS -->
+    </main>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

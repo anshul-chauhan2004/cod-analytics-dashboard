@@ -1,0 +1,12 @@
+# Data exports & raw operational files (prevent committing sensitive data)
+*.csv
+*.xls
+*.xlsx
+ULTIMATE QUERY FOR CHANGEOVER.txt
+dashboard_data.json
+
+# Prompts & system files
+*Prompt*.txt
+.DS_Store
+.vercel
+node_modules/
