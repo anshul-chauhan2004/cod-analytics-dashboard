@@ -19,14 +19,6 @@ const OPTIONAL_COLS = ['ppr_process_group','floor','mod_type','shift','cod_bucke
   'week_number','stowdate','bin_id','lc_category','drop_zone','bin_usage_type',
   'sourcescannableid','next_scannable_id','next_stow_date','change_over_time'];
 
-const LEGEND_DATA = [
-  { bucket:'0-5 min',   desc:'U-Boat utilization good — AA carrying U-boats near stow areas', target:'≥76%', color:'#22c55e' },
-  { bucket:'5-10 min',  desc:'Good changeover — replicate best-practice behaviors',            target:'<5.5%',color:'#84cc16' },
-  { bucket:'10-15 min', desc:'Mix of good/bad mod changeover — identify top defaulters',       target:'<5.5%',color:'#f59e0b' },
-  { bucket:'15-30 min', desc:'Lack of buffer — improve secondary buffer availability',         target:'<2.5%',color:'#ef4444' },
-  { bucket:'>30 min',   desc:'Potential behavior issue — improve U-Boat Homogeneity',          target:'<2%',  color:'#dc2626' },
-];
-
 Chart.defaults.color = '#8b92a8';
 Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
 Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
@@ -68,6 +60,49 @@ const fmtPct = n => n == null || isNaN(n) ? '—' : fmt(n,1)+'%';
 const codClass = v => v <= 3 ? 'cod-low' : v <= 7 ? 'cod-mid' : 'cod-high';
 const gradeOf = v => v <= 2 ? 'S' : v <= 3.5 ? 'A' : v <= 5 ? 'B' : v <= 8 ? 'C' : 'D';
 const escHtml = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function formatDay(str) {
+  if (!str) return '—';
+  const s = String(str).trim();
+  // If already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // If M/D/YYYY or MM/DD/YYYY or M-D-YYYY
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) {
+    const mm = m[1].padStart(2, '0');
+    const dd = m[2].padStart(2, '0');
+    const yyyy = m[3];
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return s;
+}
+
+function formatTime(str) {
+  if (!str) return '—';
+  const s = String(str).trim();
+  
+  // Extract time portion from timestamp like "2026-10-04 14:08:13" or "8/17/2026 0:53"
+  let timeStr = s;
+  if (s.includes(' ') || s.includes('T')) {
+    timeStr = s.split(/[ T]+/)[1] || s;
+  }
+  
+  // Match hours, minutes, and optional seconds
+  const m = timeStr.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+  if (m) {
+    let hh = parseInt(m[1], 10);
+    const mm = m[2].padStart(2, '0');
+    const ss = (m[3] !== undefined) ? m[3].padStart(2, '0') : '00';
+    
+    // Check for PM/AM if present
+    if (/pm/i.test(timeStr) && hh < 12) hh += 12;
+    if (/am/i.test(timeStr) && hh === 12) hh = 0;
+    
+    return `${String(hh).padStart(2, '0')}:${mm}:${ss}`;
+  }
+  
+  return timeStr;
+}
 
 
 function pColor(i) { return CHART_PAL[i % CHART_PAL.length]; }
@@ -313,7 +348,7 @@ function parseCSV(text, filename = 'Uploaded file') {
     row.floor = row.floor !== '' && row.floor !== null && !isNaN(row.floor) ? parseFloat(row.floor) : null;
 
     // Normalize required identity
-    row.processed_day = row.processed_day || '';
+    row.processed_day = formatDay(row.processed_day);
     row.employeelogin = row.employeelogin || '';
     if (!row.processed_day || !row.employeelogin) { invalidRows++; continue; }
 
@@ -601,6 +636,10 @@ function rebuildDSFromActiveFile() {
 
   if (DS.activeFileId === 'all') {
     DS.files.forEach(f => {
+      // Normalize dates for legacy or previously stored files on the fly
+      f.records.forEach(r => {
+        r.processed_day = formatDay(r.processed_day);
+      });
       targetRecords = targetRecords.concat(f.records);
       totalInvalid += f.invalidRows;
       f.missingCols.forEach(m => allMissing.add(m));
@@ -609,6 +648,9 @@ function rebuildDSFromActiveFile() {
   } else {
     const f = DS.files.find(x => x.id === DS.activeFileId);
     if (f) {
+      f.records.forEach(r => {
+        r.processed_day = formatDay(r.processed_day);
+      });
       targetRecords = f.records;
       totalInvalid = f.invalidRows;
       f.missingCols.forEach(m => allMissing.add(m));
@@ -702,9 +744,8 @@ function initFilters() {
   mSel.innerHTML = '<option value="">All MODs</option>';
   DS.mods.forEach(m => mSel.appendChild(new Option(m, m)));
 
-  // Events + threshold
-  $('gf-min-events').value = GF.minEvents;
-  $('gf-threshold').value = GF.threshold;
+  // Events
+  if ($('gf-min-events')) $('gf-min-events').value = GF.minEvents;
 
   // Listeners
   ['gf-date-from','gf-date-to','gf-shift','gf-process','gf-floor','gf-mod'].forEach(id => {
@@ -723,23 +764,23 @@ function initFilters() {
       }, 20);
     });
   });
-  ['gf-min-events','gf-threshold'].forEach(id => {
-    $(id).addEventListener('change', () => {
-      GF.minEvents  = parseInt($('gf-min-events').value) || 1;
-      GF.threshold  = parseFloat($('gf-threshold').value) || 10;
+  const minEvEl = $('gf-min-events');
+  if (minEvEl) {
+    minEvEl.addEventListener('change', () => {
+      GF.minEvents = parseInt(minEvEl.value) || 1;
       showPageLoader('Updating calculations...');
       setTimeout(() => {
         renderCurrentPage();
         hidePageLoader();
       }, 20);
     });
-  });
+  }
   $('btn-clear-filters').addEventListener('click', () => {
     GF.dateFrom=DS.dateMin; GF.dateTo=DS.dateMax;
-    GF.shift=''; GF.process=''; GF.floor=''; GF.mod=''; GF.minEvents=1; GF.threshold=10;
+    GF.shift=''; GF.process=''; GF.floor=''; GF.mod=''; GF.minEvents=1;
     $('gf-date-from').value=GF.dateFrom; $('gf-date-to').value=GF.dateTo;
     $('gf-shift').value=''; $('gf-process').value=''; $('gf-floor').value=''; $('gf-mod').value='';
-    $('gf-min-events').value=1; $('gf-threshold').value=10;
+    if ($('gf-min-events')) $('gf-min-events').value=1;
     showPageLoader('Resetting filters...');
     setTimeout(() => {
       applyFilters();
@@ -861,7 +902,7 @@ function renderOverview(c) {
       ${kpiCard('📦',fmtI(data.length),'Total Events')}
       ${kpiCard('⏱',fmt(stats.avg),'Mean COD (min)')}
       ${kpiCard('👥',fmtI(empStats.length),'Active Employees')}
-      ${kpiCard('🎯',goodPct+'%','In 0-5 min Bucket','','val-'+(parseFloat(goodPct)>=76?'green':'red'))}
+      ${kpiCard('🎯',goodPct+'%','In 0-5 min Bucket')}
     </div>
     <div class="kpi-strip cols-4 mb20">
       ${kpiCard('🕰',fmtI(Math.round(stats.sum)),'Total Changeover (min)')}
@@ -869,8 +910,6 @@ function renderOverview(c) {
       ${kpiCard('🚩',fmtI(empStats.filter(e=>e.avg>GF.threshold).length),'Employees > Threshold','','')}
       ${kpiCard('📅',fmtI(DS.dates.filter(d=>d>=GF.dateFrom&&d<=GF.dateTo).length),'Days in Range')}
     </div>
-
-    ${legendHtml()}
 
     <div class="grid-2 mb16">
       <div class="chart-card">
@@ -1023,7 +1062,7 @@ function renderDefSectionA(data) {
           <thead><tr>
             <th>#</th><th>Employee Login</th><th class="th-right">Events</th>
             <th class="th-right">Avg COD</th>
-            <th class="th-right">Total Min</th><th class="th-right">Hi-Dur Events</th><th class="th-right">Hi-Dur %</th>
+            <th class="th-right">Total Min</th>
             <th>Top Process</th><th>Floors</th><th>MODs</th><th>Action</th>
           </tr></thead>
           <tbody>${stats.map((e,i) => `
@@ -1033,8 +1072,6 @@ function renderDefSectionA(data) {
               <td class="td-num">${fmtI(e.count)}</td>
               <td class="td-num ${codClassTd(e.avg)}">${fmt(e.avg)}</td>
               <td class="td-num">${fmt(e.sum)}</td>
-              <td class="td-num ${e.hiCount>0?'td-warn':''}">${fmtI(e.hiCount)}</td>
-              <td class="td-num ${e.hiPct>20?'td-bad':e.hiPct>10?'td-warn':''}">${fmtPct(e.hiPct)}</td>
               <td>${escHtml(e.freqProc)}</td>
               <td>${e.floors.join(', ')}</td>
               <td>${e.mods.join(', ')}</td>
@@ -1068,7 +1105,7 @@ function renderDefSectionB(data, proc) {
           <thead><tr>
             <th>#</th><th>Employee Login</th><th class="th-right">Events</th>
             <th class="th-right">Avg COD</th>
-            <th class="th-right">Total Min</th><th class="th-right">Hi-Dur Events</th><th class="th-right">Hi-Dur %</th>
+            <th class="th-right">Total Min</th>
             <th>Floors</th><th>Action</th>
           </tr></thead>
           <tbody>${stats.map((e,i) => `
@@ -1078,8 +1115,6 @@ function renderDefSectionB(data, proc) {
               <td class="td-num">${fmtI(e.count)}</td>
               <td class="td-num ${codClassTd(e.avg)}">${fmt(e.avg)}</td>
               <td class="td-num">${fmt(e.sum)}</td>
-              <td class="td-num ${e.hiCount>0?'td-warn':''}">${fmtI(e.hiCount)}</td>
-              <td class="td-num">${fmtPct(e.hiPct)}</td>
               <td>${e.floors.join(', ')}</td>
               <td><button class="btn-sm btn-ghost" onclick="openEmp360('${escHtml(e.login)}')">360°</button></td>
             </tr>`).join('')}
@@ -1118,7 +1153,7 @@ function renderProcess(c) {
           <thead><tr>
             <th>#</th><th>Process</th><th class="th-right">Events</th><th class="th-right">Avg COD</th>
             <th class="th-right">Total Min</th>
-            <th class="th-right">Employees</th><th class="th-right">Hi-Dur %</th><th>Drill-down</th>
+            <th class="th-right">Employees</th><th>Drill-down</th>
           </tr></thead>
           <tbody>${procStats.map((p,i)=>`
             <tr>
@@ -1128,7 +1163,6 @@ function renderProcess(c) {
               <td class="td-num ${codClassTd(p.avg)}">${fmt(p.avg)}</td>
               <td class="td-num">${fmt(p.sum)}</td>
               <td class="td-num">${fmtI(p.empCount)}</td>
-              <td class="td-num ${p.hiPct>20?'td-bad':p.hiPct>10?'td-warn':''}">${fmtPct(p.hiPct)}</td>
               <td><button class="btn-sm btn-ghost" onclick="openProcessDrill('${escHtml(p.name)}')">Details →</button></td>
             </tr>`).join('')}
           </tbody>
@@ -1304,14 +1338,13 @@ function renderDaily(c) {
       </div>
       <div class="t-scroll">
         <table class="data-table">
-          <thead><tr><th>Date</th><th>Top Employee</th><th class="th-right">Events</th><th class="th-right">Avg COD</th><th class="th-right">Hi-Dur Events</th><th>Action</th></tr></thead>
+          <thead><tr><th>Date</th><th>Top Employee</th><th class="th-right">Events</th><th class="th-right">Avg COD</th><th>Action</th></tr></thead>
           <tbody>${topPerDay.map(d=>`
             <tr>
               <td><b>${d.day}</b></td>
               <td class="td-mono">${escHtml(d.top.login)}</td>
               <td class="td-num">${fmtI(d.top.count)}</td>
               <td class="td-num ${codClassTd(d.top.avg)}">${fmt(d.top.avg)}</td>
-              <td class="td-num ${d.top.hiCount>0?'td-warn':''}">${fmtI(d.top.hiCount)}</td>
               <td><button class="btn-sm btn-ghost" onclick="openEmp360('${escHtml(d.top.login)}')">360°</button></td>
             </tr>`).join('')}
           </tbody>
@@ -1545,7 +1578,7 @@ function renderFloor(c) {
           <thead><tr>
             <th>Floor</th><th class="th-right">Events</th><th class="th-right">Avg COD</th>
             <th class="th-right">Total Min</th>
-            <th class="th-right">Employees</th><th class="th-right">Hi-Dur %</th><th>Drill-down</th>
+            <th class="th-right">Employees</th><th>Drill-down</th>
           </tr></thead>
           <tbody>${floorStats.map(f=>`
             <tr>
@@ -1554,7 +1587,6 @@ function renderFloor(c) {
               <td class="td-num ${codClassTd(f.avg)}">${fmt(f.avg)}</td>
               <td class="td-num">${fmt(f.sum)}</td>
               <td class="td-num">${fmtI(f.empCount)}</td>
-              <td class="td-num ${f.hiPct>20?'td-bad':f.hiPct>10?'td-warn':''}">${fmtPct(f.hiPct)}</td>
               <td><button class="btn-sm btn-ghost" onclick="openFloorDrill(${f.name})">Details →</button></td>
             </tr>`).join('')}
           </tbody>
@@ -1661,7 +1693,7 @@ function renderMod(c) {
           <thead><tr>
             <th>MOD</th><th class="th-right">Events</th><th class="th-right">Avg COD</th>
             <th class="th-right">Total Min</th>
-            <th class="th-right">Employees</th><th class="th-right">Hi-Dur %</th><th>Drill-down</th>
+            <th class="th-right">Employees</th><th>Drill-down</th>
           </tr></thead>
           <tbody>${modStats.map(m=>`
             <tr>
@@ -1670,7 +1702,6 @@ function renderMod(c) {
               <td class="td-num ${codClassTd(m.avg)}">${fmt(m.avg)}</td>
               <td class="td-num">${fmt(m.sum)}</td>
               <td class="td-num">${fmtI(m.empCount)}</td>
-              <td class="td-num ${m.hiPct>20?'td-bad':m.hiPct>10?'td-warn':''}">${fmtPct(m.hiPct)}</td>
               <td><button class="btn-sm btn-ghost" onclick="openModDrill('${escHtml(m.name)}')">Details →</button></td>
             </tr>`).join('')}
           </tbody>
@@ -1776,8 +1807,7 @@ function renderBin(c) {
         <table class="data-table">
           <thead><tr>
             <th>Bin Type</th><th class="th-right">Events</th><th class="th-right">Avg COD</th>
-            <th class="th-right">Total Min</th><th class="th-right">Employees</th>
-            <th class="th-right">Hi-Dur %</th><th>Drill-down</th>
+            <th class="th-right">Total Min</th><th class="th-right">Employees</th><th>Drill-down</th>
           </tr></thead>
           <tbody>${typeStats.map(t=>`
             <tr>
@@ -1786,7 +1816,6 @@ function renderBin(c) {
               <td class="td-num ${codClassTd(t.avg)}">${fmt(t.avg)}</td>
               <td class="td-num">${fmt(t.sum)}</td>
               <td class="td-num">${fmtI(t.empCount)}</td>
-              <td class="td-num ${t.hiPct>20?'td-bad':t.hiPct>10?'td-warn':''}">${fmtPct(t.hiPct)}</td>
               <td><button class="btn-sm btn-ghost" onclick="openBinDrill('lc_category','${escHtml(t.name)}')">Details →</button></td>
             </tr>`).join('')}
           </tbody>
@@ -1816,8 +1845,7 @@ function renderBin(c) {
         <table class="data-table">
           <thead><tr>
             <th>Bin Usage</th><th class="th-right">Events</th><th class="th-right">Avg COD</th>
-            <th class="th-right">Total Min</th><th class="th-right">Employees</th>
-            <th class="th-right">Hi-Dur %</th><th>Drill-down</th>
+            <th class="th-right">Total Min</th><th class="th-right">Employees</th><th>Drill-down</th>
           </tr></thead>
           <tbody>${usageStats.map(u=>`
             <tr>
@@ -1826,7 +1854,6 @@ function renderBin(c) {
               <td class="td-num ${codClassTd(u.avg)}">${fmt(u.avg)}</td>
               <td class="td-num">${fmt(u.sum)}</td>
               <td class="td-num">${fmtI(u.empCount)}</td>
-              <td class="td-num ${u.hiPct>20?'td-bad':u.hiPct>10?'td-warn':''}">${fmtPct(u.hiPct)}</td>
               <td><button class="btn-sm btn-ghost" onclick="openBinDrill('bin_usage_type','${escHtml(u.name)}')">Details →</button></td>
             </tr>`).join('')}
           </tbody>
@@ -1936,7 +1963,6 @@ function renderBucket(c) {
   c.innerHTML = `
   <div class="fade-in">
     <div class="page-title"><span class="page-title-icon">⭐</span>COD Bucket Analysis</div>
-    ${legendHtml()}
     <div class="kpi-strip cols-6 mb16">
       ${BUCKET_ORDER.map(b=>{
         const cnt = bkt.counts[b]||0;
@@ -2143,12 +2169,11 @@ function renderEmp360Content(container, allData) {
       <div class="table-header"><span class="table-title">Process-wise Performance</span></div>
       <div class="t-scroll">
         <table class="data-table">
-          <thead><tr><th>Process</th><th class="th-right">Events</th><th class="th-right">Avg COD</th><th class="th-right">Hi-Dur %</th></tr></thead>
+          <thead><tr><th>Process</th><th class="th-right">Events</th><th class="th-right">Avg COD</th></tr></thead>
           <tbody>${procS.map(p=>`<tr>
             <td>${escHtml(p.name)}</td>
             <td class="td-num">${fmtI(p.count)}</td>
             <td class="td-num ${codClassTd(p.avg)}">${fmt(p.avg)}</td>
-            <td class="td-num">${fmtPct(p.hiPct)}</td>
           </tr>`).join('')}
           </tbody>
         </table>
@@ -2164,7 +2189,7 @@ function renderEmp360Content(container, allData) {
           <thead><tr><th>Date</th><th>Stow Time</th><th>Process</th><th>Floor</th><th>MOD</th><th>Shift</th><th class="th-right">COD (min)</th><th>Bucket</th></tr></thead>
           <tbody>${empData.slice(0,200).map(r=>`<tr>
             <td>${r.processed_day}</td>
-            <td class="td-mono">${r.stowdate?.slice(11,19)||'—'}</td>
+            <td class="td-mono">${formatTime(r.stowdate)}</td>
             <td>${escHtml(r.ppr_process_group||'—')}</td>
             <td>${r.floor??'—'}</td>
             <td>${escHtml(r.mod_type||'—')}</td>
@@ -2269,7 +2294,7 @@ function renderExplorer(c) {
     tbody.innerHTML = slice.map((r,i) => `<tr>
       <td class="td-num">${(explorerPage-1)*ps+i+1}</td>
       <td>${r.processed_day}</td>
-      <td class="td-mono">${r.stowdate?.slice(11,19)||'—'}</td>
+      <td class="td-mono">${formatTime(r.stowdate)}</td>
       <td class="td-mono">${escHtml(r.employeelogin)}</td>
       <td>${escHtml(r.ppr_process_group||'—')}</td>
       <td>${r.floor??'—'}</td>
@@ -2373,16 +2398,6 @@ function kpiCard(icon, val, lbl, sub='', valCls='') {
   </div>`;
 }
 
-function legendHtml() {
-  return `<div class="legend-grid5 mb16">${LEGEND_DATA.map(l=>`
-    <div class="legend-item">
-      <div class="legend-color-bar" style="background:${l.color}"></div>
-      <div class="legend-bucket" style="color:${l.color}">${l.bucket}</div>
-      <div class="legend-desc">${l.desc}</div>
-      <span class="legend-target" style="color:${l.color}">Target: ${l.target}</span>
-    </div>`).join('')}</div>`;
-}
-
 function codClassTd(v) {
   if (v == null || isNaN(v)) return '';
   if (v <= 3) return 'td-good';
@@ -2396,14 +2411,11 @@ function empTableHTML(empStats, showProcess=false) {
     <thead><tr>
       <th>#</th><th>Login</th><th class="th-right">Events</th>
       <th class="th-right">Avg COD</th>
-      <th>Grade</th>
-      <th class="th-right">Hi-Dur %</th>
       ${showProcess?'<th>Top Process</th>':''}
       <th style="min-width:120px">Bucket Bar</th>
       <th>Action</th>
     </tr></thead>
     <tbody>${empStats.map((e,i)=>{
-      const g = gradeOf(e.avg);
       const bar = `<div class="bbar">${[e.b0||e.records?.filter(r=>r.cod_bucket==='0-5 min').length/e.count*100,
         e.records?.filter(r=>r.cod_bucket==='5-10 min').length/e.count*100||0,
         e.records?.filter(r=>r.cod_bucket==='10-15 min').length/e.count*100||0,
@@ -2416,8 +2428,6 @@ function empTableHTML(empStats, showProcess=false) {
         <td class="td-mono">${escHtml(e.login)}</td>
         <td class="td-num">${fmtI(e.count)}</td>
         <td class="td-num ${codClassTd(e.avg)}">${fmt(e.avg)}</td>
-        <td><span class="grade grade-${g}">${g}</span></td>
-        <td class="td-num ${e.hiPct>20?'td-bad':e.hiPct>10?'td-warn':''}">${fmtPct(e.hiPct)}</td>
         ${showProcess?`<td>${escHtml(e.freqProc)}</td>`:''}
         <td>${bar}</td>
         <td><button class="btn-sm btn-ghost" onclick="openEmp360('${escHtml(e.login)}')">360°</button></td>
