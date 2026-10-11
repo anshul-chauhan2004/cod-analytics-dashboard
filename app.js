@@ -180,11 +180,12 @@ function calcEmpStats(records, threshold) {
     const procs = [...new Set(recs.map(r=>r.ppr_process_group).filter(Boolean))];
     const floors = [...new Set(recs.map(r=>r.floor).filter(v=>v!==null&&v!==undefined&&v!==''))].sort();
     const mods   = [...new Set(recs.map(r=>r.mod_type).filter(Boolean))].sort();
+    const shifts = [...new Set(recs.map(r=>r.shift).filter(Boolean))].sort();
     const freqProc = procs.length ? (mode => mode)(
       (() => { const cnt={}; recs.forEach(r=>r.ppr_process_group&&(cnt[r.ppr_process_group]=(cnt[r.ppr_process_group]||0)+1)); return Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0]?.[0]||''; })()
     ) : '';
     return { login, count:vals.length, sum:+sum.toFixed(2), avg:+avg.toFixed(2),
-      hiCount, hiPct:+hiPct.toFixed(1), freqProc, floors, mods, records:recs };
+      hiCount, hiPct:+hiPct.toFixed(1), freqProc, floors, mods, shifts, records:recs };
   });
 }
 function calcGroupStats(records, key, threshold) {
@@ -1040,7 +1041,7 @@ function renderDefTable(data) {
             <th>#</th><th>Employee Login</th><th class="th-right">Events</th>
             <th class="th-right">Avg COD (min)</th>
             <th class="th-right">Total Min</th>
-            <th>Top Process</th><th>Floors</th><th>MODs</th><th>Action</th>
+            <th>Shift</th><th>Top Process</th><th>Floors</th><th>MODs</th><th>Action</th>
           </tr></thead>
           <tbody>${stats.map((e,i) => `
             <tr>
@@ -1049,6 +1050,7 @@ function renderDefTable(data) {
               <td class="td-num">${fmtI(e.count)}</td>
               <td class="td-num ${codClassTd(e.avg)}">${fmt(e.avg)}</td>
               <td class="td-num">${fmt(e.sum)}</td>
+              <td>${e.shifts.join(', ') || '—'}</td>
               <td>${escHtml(e.freqProc)}</td>
               <td>${e.floors.join(', ')}</td>
               <td>${e.mods.join(', ')}</td>
@@ -1068,6 +1070,7 @@ function exportDefaulters(data) {
     avg_cod: e.avg,
     events: e.count,
     total_min: e.sum,
+    shift: e.shifts.join(';'),
     top_process: e.freqProc,
     floors: e.floors.join(';'),
     mods: e.mods.join(';')
